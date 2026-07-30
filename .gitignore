@@ -1,0 +1,7 @@
+__pycache__/
+captures/
+*.apk
+apk_probe/
+build/
+dist/
+*.spec

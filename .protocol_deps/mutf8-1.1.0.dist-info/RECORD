@@ -1,0 +1,12 @@
+mutf8-1.1.0.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
+mutf8-1.1.0.dist-info/METADATA,sha256=8FSifA_5lsvEwj-3e5QPzHOUo3FYx0hBKhO0PGBR8zA,4639
+mutf8-1.1.0.dist-info/RECORD,,
+mutf8-1.1.0.dist-info/WHEEL,sha256=pIUzES5vCYHKBR6AfxXxDFyqjZ9ckCheusePfq1FYSo,101
+mutf8-1.1.0.dist-info/licenses/LICENCE,sha256=NBzOI2qKJMlNtSkK62I3-w3CxmU1rfm5Mt6xXT6SS-Q,1127
+mutf8-1.1.0.dist-info/top_level.txt,sha256=e_NSSiB0tApuNdHbYJLjd_BdvUEBwRwFhJPEYrj1o8Y,6
+mutf8/__init__.py,sha256=xwaTIl85JOucB90LMW8ZTPuGulPo5E351PiwrqxHWpk,656
+mutf8/__pycache__/__init__.cpython-314.pyc,,
+mutf8/__pycache__/mutf8.cpython-314.pyc,,
+mutf8/cmutf8.c,sha256=uw-kaOta8jODqD6_JsnbH1nHIY6I-8BcRTxHI1R9P1s,10186
+mutf8/cmutf8.cp314-win_amd64.pyd,sha256=MZcXhITg7c2z4Zko2HNBCcN-_evmOi46bkj-Src6Pxw,13312
+mutf8/mutf8.py,sha256=zkjm92Nnsk2xMXCuIPh1yywF5O-iwJixC1yKTsOdAMM,4873
