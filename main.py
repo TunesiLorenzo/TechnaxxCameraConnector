@@ -18,6 +18,38 @@ def relaunch_command() -> list[str]:
     return [sys.executable, "-B", __file__, *sys.argv[1:]]
 
 
+def owns_console() -> bool:
+    """
+    True when this process is the only one attached to the console.
+
+    That is the case when the executable is started from Explorer, where
+    Windows closes the window the moment the program exits and any error
+    message would disappear with it.
+    """
+    try:
+        import ctypes
+
+        processes = (ctypes.c_uint * 4)()
+        count = ctypes.windll.kernel32.GetConsoleProcessList(processes, 4)
+        return count <= 1
+    except Exception:
+        return False
+
+
+def run() -> int:
+    from tx158_capture import main
+
+    try:
+        return main()
+    except KeyboardInterrupt:
+        return 130
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+
 if __name__ == "__main__":
     if os.environ.get("TX158_CAPTURE_CHILD") != "1":
         child_environment = os.environ.copy()
@@ -30,6 +62,9 @@ if __name__ == "__main__":
         )
         raise SystemExit(result.returncode)
 
-    from tx158_capture import main
+    exit_code = run()
 
-    raise SystemExit(main())
+    if owns_console():
+        input("\nPress Enter to close this window...")
+
+    raise SystemExit(exit_code)

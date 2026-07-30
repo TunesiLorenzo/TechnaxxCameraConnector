@@ -34,6 +34,34 @@ Click **Save screenshot** in the preview, or press `S`, to save a clean camera
 frame in `captures`. Press `Q` or Escape to exit. Screenshot filenames include
 milliseconds, so rapid clicks do not overwrite one another.
 
+## USB cameras
+
+USB cameras can be shown next to the microscope in the same window. List the
+ones this machine can open:
+
+```powershell
+py main.py --list-cameras
+```
+
+Then add them by index, or let the program find them:
+
+```powershell
+py main.py --usb 1          # microscope plus USB camera 1
+py main.py --usb            # microscope plus every USB camera found
+py main.py --usb 0 --usb 1  # several USB cameras
+py main.py --no-network --usb 0
+```
+
+With more than one camera the preview starts side by side. **Both cameras** /
+**Single view** switches between the combined and single view, **Next camera**
+picks which one the single view shows, and `V` stacks the combined view
+vertically instead. The keyboard equivalents are `B`, `Tab` (or `C`) and `V`.
+
+Every camera runs on its own thread, so a camera that is slow or missing never
+holds up the others; one that is not ready yet shows as a grey panel. In the
+combined view a screenshot saves one full-resolution image per camera, named
+after it (`tx158_...jpg`, `usb1_...jpg`).
+
 The preview currently reports `Battery: unavailable`. The vendor GoPlus app
 does read a five-level battery value over TCP 8081, but its request packet is
 implemented in a proprietary native library. Sending an unverified packet
