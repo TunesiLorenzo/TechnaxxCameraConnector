@@ -44,6 +44,8 @@ ZOOM_STEP = 1.25
 BUTTON_HEIGHT = 30
 BUTTON_FONT_SCALE = 0.5
 BUTTON_TEXT_THICKNESS = 1
+PANEL_CLOSE_SIZE = 28
+PANEL_CLOSE_MARGIN = 6
 
 # Angle tool: endpoint marker size and how near a click has to land to
 # pick one up, both in displayed pixels.
@@ -52,6 +54,12 @@ HANDLE_GRAB_RADIUS = 15
 
 # Highest USB camera index probed by --list-cameras and --usb auto.
 MAX_USB_INDEX = 7
+USB_OPEN_TIMEOUT = 3.0
+USB_OPEN_RETRY_DELAY = 0.25
+
+# Camera 0 is known not to work on this installation. Keep it out of manual
+# selection, startup auto-discovery, camera listing, and in-window rescans.
+IGNORED_USB_INDEXES = {0}
 
 
 def usb_backend() -> int:
@@ -163,7 +171,7 @@ def find_usb_cameras(
 
     try:
         for index in range(maximum_index + 1):
-            if skip and index in skip:
+            if index in IGNORED_USB_INDEXES or (skip and index in skip):
                 continue
 
             device = cv2.VideoCapture(index, usb_backend())
@@ -185,7 +193,11 @@ def find_usb_cameras(
 
 
 def list_cameras() -> int:
-    print(f"Probing USB camera indexes 0-{MAX_USB_INDEX}...")
+    ignored = ", ".join(str(index) for index in sorted(IGNORED_USB_INDEXES))
+    print(
+        f"Probing USB camera indexes 0-{MAX_USB_INDEX} "
+        f"(always ignoring {ignored})..."
+    )
     cameras = find_usb_cameras()
 
     if not cameras:
@@ -380,9 +392,27 @@ class VideoCaptureSource(FrameSource):
         self.backend = backend
 
     def _run(self) -> None:
-        device = cv2.VideoCapture(self.target, self.backend)
-        if not device.isOpened():
-            raise RuntimeError(f"could not open {self.target}")
+        # Auto-discovery has just opened and released a USB device to verify
+        # that it works. Some Windows UVC drivers need a short time before the
+        # device can be opened again for the real stream. Direct startup does
+        # not hit that race, which is why `--usb 1` can work while Add USB
+        # initially fails for the same camera.
+        deadline = time.monotonic() + USB_OPEN_TIMEOUT
+
+        while True:
+            device = cv2.VideoCapture(self.target, self.backend)
+            if device.isOpened():
+                break
+
+            device.release()
+            if (
+                not isinstance(self.target, int)
+                or self._stop_event.is_set()
+                or time.monotonic() >= deadline
+            ):
+                raise RuntimeError(f"could not open {self.target}")
+
+            self._stop_event.wait(USB_OPEN_RETRY_DELAY)
 
         try:
             while not self._stop_event.is_set():
@@ -708,6 +738,10 @@ class LiveWindow:
         self.pending_action: str | None = None
         self.scanning = False
         self.buttons: list[tuple[str, str, tuple[int, int, int, int]]] = []
+        self.panel_close_buttons: list[
+            tuple[str, tuple[int, int, int, int]]
+        ] = []
+        self.pending_close_slug: str | None = None
 
         # Angle tool. Every camera carries its own pair of lines, keyed by
         # slug so they survive a camera being removed and added back.
@@ -731,6 +765,12 @@ class LiveWindow:
         for _label, action, (left, top, right, bottom) in self.buttons:
             if left <= x <= right and top <= y <= bottom:
                 return action
+        return None
+
+    def _close_button_at(self, x: int, y: int) -> str | None:
+        for slug, (left, top, right, bottom) in self.panel_close_buttons:
+            if left <= x <= right and top <= y <= bottom:
+                return slug
         return None
 
     def _handle_at(self, x: int, y: int) -> tuple[str, int, int] | None:
@@ -766,7 +806,10 @@ class LiveWindow:
     ) -> None:
         if event == cv2.EVENT_LBUTTONDOWN:
             # Buttons win over endpoints so the two never fight over a click.
-            if self._button_at(x, y) is None:
+            if (
+                self._button_at(x, y) is None
+                and self._close_button_at(x, y) is None
+            ):
                 self.dragging = self._handle_at(x, y)
             return
 
@@ -791,6 +834,11 @@ class LiveWindow:
             action = self._button_at(x, y)
             if action is not None:
                 self.pending_action = action
+                return
+
+            close_slug = self._close_button_at(x, y)
+            if close_slug is not None:
+                self.pending_close_slug = close_slug
 
     def _set_zoom(self, zoom: float) -> None:
         self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, zoom))
@@ -969,10 +1017,17 @@ class LiveWindow:
 
         # Bottom right, so it never lands on the camera name label that
         # the combined view draws in the bottom left corner.
-        right = min(int(round(panel_right)), display_width)
+        right = (
+            min(int(round(panel_right)), display_width)
+            - PANEL_CLOSE_SIZE
+            - 2 * PANEL_CLOSE_MARGIN
+        )
         bottom = min(int(round(panel_bottom)), display_height)
         left = right - box_width
         top = bottom - box_height
+
+        if left < panel_left:
+            return
 
         cv2.rectangle(display, (left, top), (right, bottom), (0, 0, 0), -1)
         cv2.putText(
@@ -1085,12 +1140,32 @@ class LiveWindow:
             print("The last camera cannot be removed.")
             return
 
-        source = self.sources.pop(self.active)
-        self.active = max(0, min(self.active, len(self.sources) - 1))
+        self._remove_source(self.sources[self.active].slug)
+
+    def _remove_source(self, slug: str, allow_last: bool = False) -> bool:
+        """Remove one camera by slug; return True when none remain."""
+        if len(self.sources) <= 1 and not allow_last:
+            print("The last camera cannot be removed.")
+            return False
+
+        source_index = next(
+            (index for index, source in enumerate(self.sources) if source.slug == slug),
+            None,
+        )
+        if source_index is None:
+            return not self.sources
+
+        source = self.sources.pop(source_index)
+        if source_index < self.active:
+            self.active -= 1
+        elif source_index == self.active:
+            self.active = min(self.active, max(0, len(self.sources) - 1))
+
         self.combined = self.combined and len(self.sources) > 1
         self.applied_zoom = None
         source.stop()
         print(f"Removed {source.name}.")
+        return not self.sources
 
     @staticmethod
     def _was_closed() -> bool:
@@ -1119,7 +1194,7 @@ class LiveWindow:
             source = self.sources[self.active]
             frame = source.latest()
             if frame is None:
-                return make_placeholder(640, 480, [source.name, source.status()])
+                frame = make_placeholder(640, 480, [source.name, source.status()])
 
             self.placements[source.slug] = (
                 0.0,
@@ -1295,6 +1370,56 @@ class LiveWindow:
                 cv2.LINE_AA,
             )
 
+    def _draw_panel_close_buttons(self, display) -> None:
+        """Draw a clickable close control in every visible camera pane."""
+        display_height, display_width = display.shape[:2]
+        zoom = self.zoom or 1.0
+        self.panel_close_buttons = []
+
+        for slug, (offset_x, offset_y, scale, width, height) in self.placements.items():
+            panel_left = int(round(offset_x * zoom))
+            panel_top = int(round(offset_y * zoom))
+            panel_right = min(
+                int(round((offset_x + width * scale) * zoom)), display_width
+            )
+            panel_bottom = min(
+                int(round((offset_y + height * scale) * zoom)), display_height
+            )
+
+            if (
+                panel_right - panel_left < PANEL_CLOSE_SIZE + 2 * PANEL_CLOSE_MARGIN
+                or panel_bottom - panel_top
+                < PANEL_CLOSE_SIZE + 2 * PANEL_CLOSE_MARGIN
+            ):
+                continue
+
+            right = panel_right - PANEL_CLOSE_MARGIN
+            bottom = panel_bottom - PANEL_CLOSE_MARGIN
+            left = right - PANEL_CLOSE_SIZE
+            top = bottom - PANEL_CLOSE_SIZE
+            rectangle = (left, top, right, bottom)
+            self.panel_close_buttons.append((slug, rectangle))
+
+            cv2.rectangle(display, (left, top), (right, bottom), (45, 45, 190), -1)
+            cv2.rectangle(display, (left, top), (right, bottom), (255, 255, 255), 1)
+            inset = 8
+            cv2.line(
+                display,
+                (left + inset, top + inset),
+                (right - inset, bottom - inset),
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.line(
+                display,
+                (right - inset, top + inset),
+                (left + inset, bottom - inset),
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
     @staticmethod
     def _draw_button(display, label: str, rectangle: tuple[int, int, int, int]) -> None:
         left, top, right, bottom = rectangle
@@ -1351,6 +1476,7 @@ class LiveWindow:
         # tool needs before it can map its lines onto the display.
         display = self._scale(self._compose())
         self._draw_measure(display)
+        self._draw_panel_close_buttons(display)
         self._draw_overlay(display)
 
         cv2.imshow(WINDOW_NAME, display)
@@ -1360,6 +1486,7 @@ class LiveWindow:
             return False
 
         action, self.pending_action = self.pending_action, None
+        close_slug, self.pending_close_slug = self.pending_close_slug, None
         if key == ord("s"):
             action = "screenshot"
         elif key in (9, ord("c")):
@@ -1392,6 +1519,9 @@ class LiveWindow:
         elif action == "reset_lines":
             self._reset_lines()
 
+        if close_slug is not None and self._remove_source(close_slug, allow_last=True):
+            return False
+
         if key in (ord("+"), ord("=")):
             self._set_zoom((self.zoom or 1.0) * ZOOM_STEP)
         elif key in (ord("-"), ord("_")):
@@ -1420,6 +1550,7 @@ def print_controls(sources: list[FrameSource]) -> None:
         "  Tab or C  Next camera      B  Show one or all cameras",
         "  V         Stack the combined view vertically",
         "  M         Angle tool       N  Reset the measuring lines",
+        "Click the X in a camera pane to stop and remove that camera.",
         "Drag the round handles to move the measuring lines. Each camera",
         "shows its own angle along the bottom of its panel, and keeps its",
         "lines in the screenshots taken while the tool is on.",
@@ -1504,7 +1635,11 @@ def resolve_usb_indexes(requested: list[str] | None) -> list[int]:
                 print("No USB camera responded to --usb auto.")
             indexes.extend(detected)
         else:
-            indexes.append(int(value))
+            index = int(value)
+            if index in IGNORED_USB_INDEXES:
+                print(f"Ignoring disabled USB camera {index}.")
+                continue
+            indexes.append(index)
 
     # Opening the same device twice fails, so keep the first mention only.
     unique: list[int] = []
@@ -1660,7 +1795,8 @@ def parse_arguments() -> argparse.Namespace:
         metavar="INDEX",
         help=(
             "Also show a USB camera. Repeat for several, or pass no value "
-            "(or 'auto') to use every USB camera that responds."
+            "(or 'auto') to use every USB camera that responds. USB camera "
+            "index 0 is always ignored."
         ),
     )
     parser.add_argument(

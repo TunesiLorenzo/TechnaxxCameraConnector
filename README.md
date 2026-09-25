@@ -48,9 +48,13 @@ Then add them by index, or let the program find them:
 ```powershell
 py main.py --usb 1          # microscope plus USB camera 1
 py main.py --usb            # microscope plus every USB camera found
-py main.py --usb 0 --usb 1  # several USB cameras
-py main.py --no-network --usb 0
+py main.py --usb 1 --usb 2  # several USB cameras
+py main.py --no-network --usb 1
 ```
+
+USB camera index `0` is disabled for this installation and is never opened,
+including during automatic scans. Each visible camera pane has an **X** in its
+lower-right corner that stops and removes just that camera.
 
 With more than one camera the preview starts side by side. **Both cameras** /
 **Single view** switches between the combined and single view, **Next camera**
